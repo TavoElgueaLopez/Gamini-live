@@ -5,7 +5,7 @@
 class AudioCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.bufferSize = 4096;
+    this.bufferSize = 512; // 32ms at 16kHz — per Gemini best practices (20-40ms chunks)
     this.buffer = new Float32Array(this.bufferSize);
     this.bufferIndex = 0;
   }

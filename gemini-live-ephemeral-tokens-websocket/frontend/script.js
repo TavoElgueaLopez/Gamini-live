@@ -234,17 +234,14 @@ function disconnect() {
 
 // Handle messages
 function handleMessage(message) {
-  console.log("Message:", message);
   updateStatus("debugInfo", `Message: ${message.type}`);
 
   switch (message.type) {
     case MultimodalLiveResponseType.TEXT:
-      console.log("Text message:");
       addMessage(message.data, "assistant");
       break;
 
     case MultimodalLiveResponseType.AUDIO:
-      console.log("Audio message:");
       if (state.audio.player) {
         state.audio.player.play(message.data);
       }
