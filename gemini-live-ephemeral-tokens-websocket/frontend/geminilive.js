@@ -19,59 +19,82 @@ const MultimodalLiveResponseType = {
 /**
  * Parses response messages from the Gemini Live API
  */
-class MultimodalLiveResponseMessage {
-  constructor(data) {
-    this.data = "";
-    this.type = "";
-    this.endOfTurn = false;
+/**
+ * Parses ALL response types from a single server message.
+ * The server can now bundle multiple fields (e.g. audio + transcription)
+ * in the same message. Returns an array of response objects.
+ */
+function parseResponseMessages(data) {
+  const responses = [];
+  const serverContent = data?.serverContent;
+  const parts = serverContent?.modelTurn?.parts;
 
-    console.log("raw message data: ", data);
+  try {
+    // Setup complete (exclusive — no other fields expected)
+    if (data?.setupComplete) {
+      console.log("🏁 SETUP COMPLETE response", data);
+      responses.push({ type: MultimodalLiveResponseType.SETUP_COMPLETE, data: "", endOfTurn: false });
+      return responses;
+    }
 
-    const serverContent = data?.serverContent;
-    this.endOfTurn = serverContent?.turnComplete;
-    const parts = serverContent?.modelTurn?.parts;
+    // Tool call (exclusive)
+    if (data?.toolCall) {
+      console.log("🎯 🛠️ TOOL CALL response", data?.toolCall);
+      responses.push({ type: MultimodalLiveResponseType.TOOL_CALL, data: data.toolCall, endOfTurn: false });
+      return responses;
+    }
 
-    try {
-      if (data?.setupComplete) {
-        console.log("🏁 SETUP COMPLETE response", data);
-        this.type = MultimodalLiveResponseType.SETUP_COMPLETE;
-      } else if (serverContent?.turnComplete) {
-        console.log("🏁 TURN COMPLETE response");
-        this.type = MultimodalLiveResponseType.TURN_COMPLETE;
-      } else if (serverContent?.interrupted) {
-        console.log("🗣️ INTERRUPTED response");
-        this.type = MultimodalLiveResponseType.INTERRUPTED;
-      } else if (serverContent?.inputTranscription) {
-        console.log("📝 INPUT TRANSCRIPTION:", serverContent.inputTranscription);
-        this.type = MultimodalLiveResponseType.INPUT_TRANSCRIPTION;
-        this.data = {
+    // Audio data from model turn parts
+    if (parts?.length) {
+      for (const part of parts) {
+        if (part.inlineData) {
+          responses.push({ type: MultimodalLiveResponseType.AUDIO, data: part.inlineData.data, endOfTurn: false });
+        } else if (part.text) {
+          console.log("💬 TEXT response", part.text);
+          responses.push({ type: MultimodalLiveResponseType.TEXT, data: part.text, endOfTurn: false });
+        }
+      }
+    }
+
+    // Transcriptions — checked independently, NOT in else-if with audio
+    if (serverContent?.inputTranscription) {
+      responses.push({
+        type: MultimodalLiveResponseType.INPUT_TRANSCRIPTION,
+        data: {
           text: serverContent.inputTranscription.text || "",
           finished: serverContent.inputTranscription.finished || false,
-        };
-      } else if (serverContent?.outputTranscription) {
-        console.log("📝 OUTPUT TRANSCRIPTION:", serverContent.outputTranscription);
-        this.type = MultimodalLiveResponseType.OUTPUT_TRANSCRIPTION;
-        this.data = {
+        },
+        endOfTurn: false,
+      });
+    }
+
+    if (serverContent?.outputTranscription) {
+      responses.push({
+        type: MultimodalLiveResponseType.OUTPUT_TRANSCRIPTION,
+        data: {
           text: serverContent.outputTranscription.text || "",
           finished: serverContent.outputTranscription.finished || false,
-        };
-      } else if (data?.toolCall) {
-        console.log("🎯 🛠️ TOOL CALL response", data?.toolCall);
-        this.type = MultimodalLiveResponseType.TOOL_CALL;
-        this.data = data?.toolCall;
-      } else if (parts?.length && parts[0].text) {
-        console.log("💬 TEXT response", parts[0].text);
-        this.data = parts[0].text;
-        this.type = MultimodalLiveResponseType.TEXT;
-      } else if (parts?.length && parts[0].inlineData) {
-        console.log("🔊 AUDIO response");
-        this.data = parts[0].inlineData.data;
-        this.type = MultimodalLiveResponseType.AUDIO;
-      }
-    } catch (err) {
-      console.log("⚠️ Error parsing response data: ", err, data);
+        },
+        endOfTurn: false,
+      });
     }
+
+    // Interrupted
+    if (serverContent?.interrupted) {
+      console.log("🗣️ INTERRUPTED response");
+      responses.push({ type: MultimodalLiveResponseType.INTERRUPTED, data: "", endOfTurn: false });
+    }
+
+    // Turn complete
+    if (serverContent?.turnComplete) {
+      console.log("🏁 TURN COMPLETE response");
+      responses.push({ type: MultimodalLiveResponseType.TURN_COMPLETE, data: "", endOfTurn: true });
+    }
+  } catch (err) {
+    console.log("⚠️ Error parsing response data: ", err, data);
   }
+
+  return responses;
 }
 
 /**
@@ -105,7 +128,7 @@ class FunctionCallDefinition {
         parameters
       )}`
     );
-    this.functionToCall(parameters);
+    return this.functionToCall(parameters);
   }
 }
 
@@ -121,10 +144,8 @@ class GeminiLiveAPI {
     this.responseModalities = ["AUDIO"];
     this.systemInstructions = "";
     this.googleGrounding = false;
-    this.enableAffectiveDialog = false; // Default affective dialog
     this.voiceName = "Puck"; // Default voice
     this.temperature = 1.0; // Default temperature
-    this.proactivity = { proactiveAudio: false }; // Proactivity config
     this.inputAudioTranscription = false;
     this.outputAudioTranscription = false;
     this.enableFunctionCalls = false;
@@ -195,10 +216,7 @@ class GeminiLiveAPI {
     this.voiceName = voiceName;
   }
 
-  setProactivity(proactivity) {
-    console.log("setting proactivity: ", proactivity);
-    this.proactivity = proactivity;
-  }
+
 
   setInputAudioTranscription(enabled) {
     console.log("setting input audio transcription: ", enabled);
@@ -223,7 +241,7 @@ class GeminiLiveAPI {
 
   callFunction(functionName, parameters) {
     const functionToCall = this.functionsMap[functionName];
-    functionToCall.runFunction(parameters);
+    return functionToCall.runFunction(parameters);
   }
 
   connect() {
@@ -238,15 +256,12 @@ class GeminiLiveAPI {
   }
 
   sendMessage(message) {
-    console.log("🟩 Sending message: ", message);
     if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
       this.webSocket.send(JSON.stringify(message));
     }
   }
 
   async onReceiveMessage(messageEvent) {
-    console.log("Message received: ", messageEvent);
-
     let jsonData;
     if (messageEvent.data instanceof Blob) {
       jsonData = await messageEvent.data.text();
@@ -258,8 +273,11 @@ class GeminiLiveAPI {
 
     try {
       const messageData = JSON.parse(jsonData);
-      const message = new MultimodalLiveResponseMessage(messageData);
-      this.onReceiveResponse(message);
+      // Parse all response types from this message (audio + transcription can coexist)
+      const responses = parseResponseMessages(messageData);
+      for (const response of responses) {
+        this.onReceiveResponse(response);
+      }
     } catch (err) {
       console.error("Error parsing JSON message:", err, jsonData);
     }
@@ -322,8 +340,8 @@ class GeminiLiveAPI {
           },
         },
         systemInstruction: { parts: [{ text: this.systemInstructions }] },
-        tools: { functionDeclarations: tools },
-        proactivity: this.proactivity,
+        tools: [{ functionDeclarations: tools }],
+
 
         realtimeInputConfig: {
           automaticActivityDetection: {
@@ -334,6 +352,7 @@ class GeminiLiveAPI {
             startOfSpeechSensitivity: this.automaticActivityDetection.start_of_speech_sensitivity,
           },
           activityHandling: this.activityHandling,
+          turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
         },
       },
     };
@@ -347,18 +366,14 @@ class GeminiLiveAPI {
     }
 
     if (this.googleGrounding) {
-      sessionSetupMessage.setup.tools.googleSearch = {};
       // Currently can't have both Google Search with custom tools.
       console.log(
         "Google Grounding enabled, removing custom function calls if any."
       );
-      delete sessionSetupMessage.setup.tools.functionDeclarations;
+      sessionSetupMessage.setup.tools = [{ googleSearch: {} }];
     }
 
-    // Add affective dialog if enabled
-    if (this.enableAffectiveDialog) {
-      sessionSetupMessage.setup.generationConfig.enableAffectiveDialog = true;
-    }
+
 
     // Store the setup message for later access
     this.lastSetupMessage = sessionSetupMessage;
@@ -376,11 +391,10 @@ class GeminiLiveAPI {
     this.sendMessage(message);
   }
 
-  sendToolResponse(toolCallId, response) {
+  sendToolResponse(functionResponses) {
     const message = {
       toolResponse: {
-        id: toolCallId,
-        response: response,
+        functionResponses: functionResponses,
       },
     };
     console.log("🔧 Sending tool response:", message);

@@ -22,10 +22,8 @@ function initDOM() {
     "enableInputTranscription",
     "enableOutputTranscription",
     "enableGrounding",
-    "enableAffectiveDialog",
     "enableAlertTool",
     "enableCssStyleTool",
-    "enableProactiveAudio",
     "voiceSelect",
     "temperature",
     "temperatureValue",
@@ -136,15 +134,9 @@ async function connect() {
     state.client.outputAudioTranscription =
       elements.enableOutputTranscription.checked;
     state.client.googleGrounding = elements.enableGrounding.checked;
-    state.client.enableAffectiveDialog = elements.enableAffectiveDialog.checked;
     state.client.responseModalities = ["AUDIO"];
     state.client.voiceName = elements.voiceSelect.value;
     state.client.temperature = parseFloat(elements.temperature.value);
-
-    // Set proactivity configuration
-    state.client.proactivity = {
-      proactiveAudio: elements.enableProactiveAudio.checked,
-    };
 
     // Set automatic activity detection configuration
     state.client.automaticActivityDetection = {
@@ -234,17 +226,14 @@ function disconnect() {
 
 // Handle messages
 function handleMessage(message) {
-  console.log("Message:", message);
   updateStatus("debugInfo", `Message: ${message.type}`);
 
   switch (message.type) {
     case MultimodalLiveResponseType.TEXT:
-      console.log("Text message:");
       addMessage(message.data, "assistant");
       break;
 
     case MultimodalLiveResponseType.AUDIO:
-      console.log("Audio message:");
       if (state.audio.player) {
         state.audio.player.play(message.data);
       }
@@ -282,17 +271,36 @@ function handleMessage(message) {
     case MultimodalLiveResponseType.TOOL_CALL:
       console.log("🛠️ Tool call received: ", message.data);
       const functionCalls = message.data.functionCalls;
+      const functionResponses = [];
       for (let index = 0; index < functionCalls.length; index++) {
         const functionCall = functionCalls[index];
         const functionName = functionCall.name;
+        const functionCallId = functionCall.id;
         const parameters = functionCall.args;
         console.log(
           `Calling function ${functionName} with parameters: ${JSON.stringify(
             parameters
           )}`
         );
-        state.client.callFunction(functionName, parameters);
+        let result;
+        try {
+          result = state.client.callFunction(functionName, parameters);
+          functionResponses.push({
+            id: functionCallId,
+            name: functionName,
+            response: { result: result ?? "ok" },
+          });
+        } catch (err) {
+          console.error(`Error calling function ${functionName}:`, err);
+          functionResponses.push({
+            id: functionCallId,
+            name: functionName,
+            response: { error: err.message },
+          });
+        }
       }
+      // Send all function responses back to the API
+      state.client.sendToolResponse(functionResponses);
       break;
 
     case MultimodalLiveResponseType.TURN_COMPLETE:

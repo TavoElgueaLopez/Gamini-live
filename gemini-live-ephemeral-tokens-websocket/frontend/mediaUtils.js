@@ -462,10 +462,11 @@ class AudioPlayer {
         await this.audioContext.resume();
       }
 
-      // Convert base64 to Float32Array
+      // Efficient base64 → binary decode
       const binaryString = atob(base64Audio);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
 
